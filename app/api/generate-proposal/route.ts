@@ -32,6 +32,8 @@ Guidelines for each section:
 
 ALL content must be valid HTML suitable for a rich text editor (Tiptap). Use <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em> tags. Do NOT use markdown. Do NOT include \`\`\`json or any wrapper — return only the raw JSON object.`
 
+export const maxDuration = 60
+
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -71,8 +73,8 @@ Return only the JSON object as specified.`
 
   try {
     const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4096,
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 2048,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userPrompt }],
     })
