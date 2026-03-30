@@ -32,6 +32,7 @@ Guidelines for each section:
 
 ALL content must be valid HTML suitable for a rich text editor (Tiptap). Use <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em> tags. Do NOT use markdown. Do NOT include \`\`\`json or any wrapper — return only the raw JSON object.`
 
+export const runtime = "edge"
 export const maxDuration = 60
 
 export async function POST(request: NextRequest) {
