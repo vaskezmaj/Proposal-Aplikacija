@@ -45,8 +45,11 @@ export default function NewProposalPage() {
         }),
       })
 
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || "Failed to generate proposal")
+      const text = await res.text()
+      const resultLine = text.split("\n").findLast(l => l.startsWith("RESULT:"))
+      if (!resultLine) throw new Error("No response from server")
+      const data = JSON.parse(resultLine.slice(7))
+      if (data.error) throw new Error(data.error)
 
       router.push(`/proposals/${data.id}`)
     } catch (err: unknown) {

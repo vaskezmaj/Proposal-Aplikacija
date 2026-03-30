@@ -71,51 +71,78 @@ ${description}
 
 Return only the JSON object as specified.`
 
-  try {
-    const message = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
-    })
+  const encoder = new TextEncoder()
 
-    const rawContent = message.content[0].type === "text" ? message.content[0].text : ""
+  const stream = new ReadableStream({
+    async start(controller) {
+      let fullText = ""
 
-    // Strip any accidental markdown fences
-    const cleaned = rawContent.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim()
-    const proposalContent = JSON.parse(cleaned)
+      try {
+        // Stream from Anthropic — sends data to Netlify continuously, preventing timeout
+        const anthropicStream = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 4096,
+          stream: true,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: "user", content: userPrompt }],
+        })
 
-    const { data: proposal, error } = await supabase
-      .from("proposals")
-      .insert({
-        user_id: user.id,
-        title,
-        client_name,
-        client_email,
-        description,
-        amount,
-        content: {
-          ...proposalContent,
-          metadata: {
-            ...proposalContent.metadata,
-            payment_terms: payment_terms ?? "net30",
-            payment_terms_label: paymentTermsText,
-          },
-        },
-        status: "draft",
-      })
-      .select("id")
-      .single()
+        for await (const event of anthropicStream) {
+          if (
+            event.type === "content_block_delta" &&
+            event.delta.type === "text_delta"
+          ) {
+            fullText += event.delta.text
+            // Send a byte to keep the Netlify connection alive
+            controller.enqueue(encoder.encode(" "))
+          }
+        }
 
-    if (error) {
-      console.error("Supabase insert error:", error)
-      return NextResponse.json({ error: "Failed to save proposal" }, { status: 500 })
-    }
+        // Parse and save to Supabase
+        const cleaned = fullText
+          .replace(/^```json\s*/i, "")
+          .replace(/^```\s*/i, "")
+          .replace(/```$/i, "")
+          .trim()
+        const proposalContent = JSON.parse(cleaned)
 
-    return NextResponse.json({ id: proposal.id })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error("Generation error:", message)
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
+        const { data: proposal, error } = await supabase
+          .from("proposals")
+          .insert({
+            user_id: user.id,
+            title,
+            client_name,
+            client_email,
+            description,
+            amount,
+            content: {
+              ...proposalContent,
+              metadata: {
+                ...proposalContent.metadata,
+                payment_terms: payment_terms ?? "net30",
+                payment_terms_label: paymentTermsText,
+              },
+            },
+            status: "draft",
+          })
+          .select("id")
+          .single()
+
+        if (error) {
+          controller.enqueue(encoder.encode(`\nRESULT:${JSON.stringify({ error: "Failed to save proposal" })}`))
+        } else {
+          controller.enqueue(encoder.encode(`\nRESULT:${JSON.stringify({ id: proposal.id })}`))
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        controller.enqueue(encoder.encode(`\nRESULT:${JSON.stringify({ error: message })}`))
+      }
+
+      controller.close()
+    },
+  })
+
+  return new Response(stream, {
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  })
 }
