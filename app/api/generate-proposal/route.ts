@@ -112,7 +112,8 @@ Return only the JSON object as specified.`
 
     return NextResponse.json({ id: proposal.id })
   } catch (err) {
-    console.error("Generation error:", err)
-    return NextResponse.json({ error: "Failed to generate proposal" }, { status: 500 })
+    const message = err instanceof Error ? err.message : String(err)
+    console.error("Generation error:", message)
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
