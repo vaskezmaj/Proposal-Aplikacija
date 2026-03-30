@@ -2,38 +2,11 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { anthropic } from "@/lib/anthropic"
 
-const SYSTEM_PROMPT = `You are an expert agency proposal writer with 15+ years of experience winning high-value client contracts. Your proposals are known for being clear, persuasive, and professionally formatted.
+const SYSTEM_PROMPT = `You are a proposal writer. Return a JSON object with this exact shape — no markdown, no extra text, just raw JSON:
 
-You will be given details about a project and you must return a complete proposal as a JSON object with exactly this shape:
+{"metadata":{"client_name":"string","project_name":"string","valid_until":"string"},"sections":[{"id":"cover","title":"Cover","content":"HTML"},{"id":"scope","title":"Scope of Work","content":"HTML"},{"id":"investment","title":"Investment","content":"HTML"},{"id":"terms","title":"Terms","content":"HTML"}]}
 
-{
-  "metadata": {
-    "client_name": "string",
-    "project_name": "string",
-    "valid_until": "string (date 30 days from today formatted as Month DD, YYYY)"
-  },
-  "sections": [
-    { "id": "cover", "title": "Cover", "content": "HTML string" },
-    { "id": "executive_summary", "title": "Executive Summary", "content": "HTML string" },
-    { "id": "scope", "title": "Scope of Work", "content": "HTML string" },
-    { "id": "timeline", "title": "Timeline", "content": "HTML string" },
-    { "id": "investment", "title": "Investment", "content": "HTML string" },
-    { "id": "terms", "title": "Terms & Conditions", "content": "HTML string" }
-  ]
-}
-
-Guidelines for each section:
-- cover: A short compelling paragraph introducing the proposal, addressing the client by name. Express excitement about the project. Include the project name and a brief hook sentence.
-- executive_summary: 2-3 paragraphs. Summarize the client's challenge/opportunity, your proposed solution, and the key outcomes they will achieve. Professional, confident tone.
-- scope: Use <h3> tags for deliverable groups and <ul><li> for individual deliverables. Be specific about what is included. List 4-8 deliverable categories based on the project description.
-- timeline: Use <h3> for phase names and <p> for phase descriptions. Break the project into 3-5 phases with realistic timeframes (e.g., "Phase 1 — Discovery & Strategy (Week 1-2)"). Include key milestones.
-- investment: Start with a clear investment summary. Use a simple table-like layout with <div> tags showing the total. Include what is included in the investment. Mention payment terms (50% upfront, 50% on delivery). Show the exact dollar amount provided.
-- terms: Professional standard agency terms. Cover: acceptance/signing, payment schedule, revision rounds (2 rounds included), IP transfer (upon full payment), confidentiality, project commencement, cancellation policy. Use <h3> and <p> tags. Keep each term concise.
-
-ALL content must be valid HTML suitable for a rich text editor (Tiptap). Use <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em> tags. Do NOT use markdown. Do NOT include \`\`\`json or any wrapper — return only the raw JSON object.`
-
-export const runtime = "edge"
-export const maxDuration = 60
+Use <p><strong><ul><li><h3> tags. Be concise but professional.`
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -59,91 +32,50 @@ export async function POST(request: NextRequest) {
   }
   const paymentTermsText = paymentTermsLabel[payment_terms ?? "net30"] ?? "Net 30 (due within 30 days)"
 
-  const userPrompt = `Please write a complete proposal for the following project:
+  try {
+    const message = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages: [{
+        role: "user",
+        content: `Project: ${title} | Client: ${client_name} | Amount: $${amount} | Terms: ${paymentTermsText} | Date: ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })} | Description: ${description}`
+      }],
+    })
 
-Project Title: ${title}
-Client Name: ${client_name}
-Project Amount: $${amount.toLocaleString()}
-Payment Terms: ${paymentTermsText}
-Today's Date: ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+    const rawContent = message.content[0].type === "text" ? message.content[0].text : ""
+    const cleaned = rawContent.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim()
+    const proposalContent = JSON.parse(cleaned)
 
-Project Description:
-${description}
+    const { data: proposal, error } = await supabase
+      .from("proposals")
+      .insert({
+        user_id: user.id,
+        title,
+        client_name,
+        client_email,
+        description,
+        amount,
+        content: {
+          ...proposalContent,
+          metadata: {
+            ...proposalContent.metadata,
+            payment_terms: payment_terms ?? "net30",
+            payment_terms_label: paymentTermsText,
+          },
+        },
+        status: "draft",
+      })
+      .select("id")
+      .single()
 
-Return only the JSON object as specified.`
+    if (error) {
+      return NextResponse.json({ error: "Failed to save: " + error.message }, { status: 500 })
+    }
 
-  const encoder = new TextEncoder()
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      let fullText = ""
-
-      try {
-        // Stream from Anthropic — sends data to Netlify continuously, preventing timeout
-        const anthropicStream = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 4096,
-          stream: true,
-          system: SYSTEM_PROMPT,
-          messages: [{ role: "user", content: userPrompt }],
-        })
-
-        for await (const event of anthropicStream) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            fullText += event.delta.text
-            // Send a byte to keep the Netlify connection alive
-            controller.enqueue(encoder.encode(" "))
-          }
-        }
-
-        // Parse and save to Supabase
-        const cleaned = fullText
-          .replace(/^```json\s*/i, "")
-          .replace(/^```\s*/i, "")
-          .replace(/```$/i, "")
-          .trim()
-        const proposalContent = JSON.parse(cleaned)
-
-        const { data: proposal, error } = await supabase
-          .from("proposals")
-          .insert({
-            user_id: user.id,
-            title,
-            client_name,
-            client_email,
-            description,
-            amount,
-            content: {
-              ...proposalContent,
-              metadata: {
-                ...proposalContent.metadata,
-                payment_terms: payment_terms ?? "net30",
-                payment_terms_label: paymentTermsText,
-              },
-            },
-            status: "draft",
-          })
-          .select("id")
-          .single()
-
-        if (error) {
-          controller.enqueue(encoder.encode(`\nRESULT:${JSON.stringify({ error: "Failed to save proposal" })}`))
-        } else {
-          controller.enqueue(encoder.encode(`\nRESULT:${JSON.stringify({ id: proposal.id })}`))
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        controller.enqueue(encoder.encode(`\nRESULT:${JSON.stringify({ error: message })}`))
-      }
-
-      controller.close()
-    },
-  })
-
-  return new Response(stream, {
-    headers: { "Content-Type": "text/plain; charset=utf-8" },
-  })
+    return NextResponse.json({ id: proposal.id })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 }
