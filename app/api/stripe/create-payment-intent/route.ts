@@ -26,17 +26,23 @@ export async function POST(request: NextRequest) {
 
   const amountCents = Math.round(Number(proposal.amount) * 100)
 
-  const paymentIntent = await stripe.paymentIntents.create({
-    amount: amountCents,
-    currency: "usd",
-    metadata: {
-      proposal_id: proposalId,
-      client_name: proposal.client_name ?? "",
-      client_email: proposal.client_email ?? "",
-    },
-    receipt_email: proposal.client_email ?? undefined,
-    description: proposal.title,
-  })
+  let paymentIntent
+  try {
+    paymentIntent = await stripe.paymentIntents.create({
+      amount: amountCents,
+      currency: "usd",
+      metadata: {
+        proposal_id: proposalId,
+        client_name: proposal.client_name ?? "",
+        client_email: proposal.client_email ?? "",
+      },
+      receipt_email: proposal.client_email ?? undefined,
+      description: proposal.title,
+    })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Stripe error"
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 
   // Store payment intent ID
   await supabase

@@ -31,6 +31,7 @@ interface PaymentModalProps {
 export function PaymentModal({ open, proposalId, proposalTitle, amount, onPaid }: PaymentModalProps) {
   const [clientSecret, setClientSecret] = useState("")
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
 
   useEffect(() => {
     if (!open || clientSecret) return
@@ -42,7 +43,11 @@ export function PaymentModal({ open, proposalId, proposalTitle, amount, onPaid }
     })
       .then(r => r.json())
       .then(data => {
-        setClientSecret(data.clientSecret)
+        if (data.error) {
+          setError(data.error)
+        } else {
+          setClientSecret(data.clientSecret)
+        }
         setLoading(false)
       })
   }, [open, proposalId, clientSecret])
@@ -60,7 +65,9 @@ export function PaymentModal({ open, proposalId, proposalTitle, amount, onPaid }
           </DialogDescription>
         </DialogHeader>
 
-        {loading || !clientSecret ? (
+        {error ? (
+          <p className="text-red-600 text-sm py-6 text-center">{error}</p>
+        ) : loading || !clientSecret ? (
           <div className="flex items-center justify-center py-10">
             <div className="w-6 h-6 border-2 border-slate-300 border-t-slate-900 rounded-full animate-spin" />
           </div>
